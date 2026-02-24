@@ -1,7 +1,7 @@
 import gc
 import hashlib
 import json
-
+import math
 import torch
 import whisperx
 from runpod.serverless.utils import rp_cuda
@@ -174,13 +174,16 @@ class Predictor:
         transcription = format_segments(transcription_mode, segments)
         serialized_segments = serialize_segments(segments)
 
-        # Bug fixato: Creazione corretta della lista dei timestamp
+        # Creazione sicura della lista dei timestamp delle parole
         word_timestamps = [
-            {"word": w.get("word", ""), "start": w.get("start", 0), "end": w.get("end", 0)}
+            {
+                "word": w.get("word", ""), 
+                "start": clean_float(w.get("start")), 
+                "end": clean_float(w.get("end"))
+            }
             for seg in segments
             for w in seg.get("words", [])
-        ] if enable_word_timestamps else None
-            
+        ] if enable_word_timestamps else None            
         return detected_language, transcription, serialized_segments, word_timestamps
 
     def translate(self, format_type, language, batch_size, audio_array):
@@ -197,7 +200,11 @@ class Predictor:
 
 def serialize_segments(segments):
     return [
-        {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
+        {
+            "start": clean_float(seg.get("start")), 
+            "end": clean_float(seg.get("end")), 
+            "text": seg.get("text", "")
+        }
         for seg in segments
     ]
 
@@ -237,3 +244,15 @@ def write_srt(segments):
         result += f"{_fmt_ts(seg['end'], always_include_hours=True, decimal_marker=',')}\n"
         result += f"{seg['text'].strip().replace('-->', '->')}\n\n"
     return result
+
+def clean_float(val):
+    """Converte i tipi numpy in float python e rimuove i NaN/Inf."""
+    if val is None:
+        return 0.0
+    try:
+        f_val = float(val)
+        if math.isnan(f_val) or math.isinf(f_val):
+            return 0.0
+        return round(f_val, 3) # Arrotonda a 3 decimali per un JSON più pulito
+    except (ValueError, TypeError):
+        return 0.0
