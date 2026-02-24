@@ -28,8 +28,10 @@ class Predictor:
         pass
 
     def _device(self):
-        return "cuda" if rp_cuda.is_available() else "cpu"
-
+        device = "cuda" if rp_cuda.is_available() else "cpu"
+        print(f"--- DEVICE SELEZIONATO: {device} ---")
+        return device
+    
     def _load_model(self, model_name, asr_options, vad_method):
         # Generiamo l'hash basandoci solo sulle opzioni effettivamente passate
         options_hash = hashlib.md5(
@@ -56,7 +58,7 @@ class Predictor:
         self._model = whisperx.load_model(
             model_name,
             device=device,
-            asr_options=asr_options,
+            compute_type="float16",
             vad_method=vad_method,
         )
 
@@ -172,6 +174,9 @@ class Predictor:
                 print(f"Warning: word alignment failed: {e}")
 
         transcription = format_segments(transcription_mode, segments)
+        vtt = format_segments("vtt", segments)
+        srt = format_segments("srt", segments)
+        plain_text = format_segments("plain_text", segments)
         serialized_segments = serialize_segments(segments)
 
         # Creazione sicura della lista dei timestamp delle parole
