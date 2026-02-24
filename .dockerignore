@@ -1,0 +1,35 @@
+# Git e CI/CD
+.git
+.gitignore
+.github
+
+# Configurazioni IDE e Tool
+.claude
+.runpod
+.vscode
+.idea
+
+# Python (Cruciale per evitare conflitti di cache)
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache
+.venv
+venv
+env
+.env
+
+# Documentazione e Media non necessari a runtime
+README.md
+LICENSE
+public/
+banner.jpeg
+banner.png
+
+# File di test e benchmark (opzionale, se non li usi in produzione)
+locustfile.py
+
+# Docker stesso
+Dockerfile
+docker-compose.yaml

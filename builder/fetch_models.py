@@ -1,30 +1,29 @@
-from faster_whisper.utils import download_model
+import sys
+import os
+import torch  # <--- Aggiunto
+import whisperx
+from config import MODELS, COMPUTE_TYPE_CPU
 
-model_names = [
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v1",
-    "large-v2",
-    "large-v3",
-    "distil-large-v2",
-    "distil-large-v3",
-    "turbo",
-]
+sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, "/")
 
+# --- WHISPERX ---
+for model_name in MODELS:
+    print(f"Downloading Whisper model: {model_name}...")
+    model = whisperx.load_model(model_name, device="cpu", compute_type=COMPUTE_TYPE_CPU)
+    del model
+    print(f"Finished downloading {model_name}.")
 
-def download_model_weights(selected_model):
-    """
-    Download model weights.
-    """
-    print(f"Downloading {selected_model}...")
-    download_model(selected_model, cache_dir=None)
-    print(f"Finished downloading {selected_model}.")
+# --- SILERO VAD ---
+print("Downloading Silero VAD...")
+# Carichiamo il modello su CPU per forzare il download dei file nella TORCH_HOME
+vad_model, vad_utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                                      model='silero_vad',
+                                      force_reload=False,
+                                      onnx=False,
+                                      trust_repo=True)
+del vad_model
+print("Finished downloading Silero VAD.")
 
-
-# Loop through models sequentially
-for model_name in model_names:
-    download_model_weights(model_name)
-
-print("Finished downloading all models.")
+print("All models downloaded.")

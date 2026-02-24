@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /c/Users/Leonardo/Desktop/code/worker-faster_whisperx && docker compose up --build 2>&1)",
+      "Bash(python3:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch"
+    ]
+  }
+}

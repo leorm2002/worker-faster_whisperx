@@ -1,17 +1,14 @@
 {
   "input": {
-    "audio": "https://github.com/runpod-workers/sample-inputs/raw/main/audio/gettysburg.wav",
-    "model": "turbo",
-    "transcription": "plain text",
+    "audio": "https://raw.githubusercontent.com/leorm2002/temp_prova_public/refs/heads/main/audio.mp3",
+    "model": "large-v2",
+    "language": "it",
+    "transcription": "plain_text",
     "translate": false,
-    "temperature": 0,
-    "best_of": 5,
     "beam_size": 5,
-    "suppress_tokens": "-1",
     "condition_on_previous_text": false,
-    "temperature_increment_on_fallback": 0.2,
-    "compression_ratio_threshold": 2.4,
-    "logprob_threshold": -1,
-    "no_speech_threshold": 0.6
+    "logprob_threshold": -1.0,
+    "no_speech_threshold": 0.6,
+    "vad_method": "silero"
   }
 }

@@ -1,53 +1,39 @@
-# faster-whisper turbo needs cudnnn >= 9
-# see https://github.com/runpod-workers/worker-faster_whisper/pull/44
-FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
-# Remove any third-party apt sources to avoid issues with expiring keys.
-RUN rm -f /etc/apt/sources.list.d/*.list
-
-# Set shell and noninteractive environment variables
 SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
-ENV SHELL=/bin/bash
-
-# Set working directory
+# Sopprime i warning di ONNXRuntime sulla GPU discovery (DRM non accessibile in container)
+ENV ORT_LOG_SEVERITY_LEVEL=3
+ENV TORCH_HOME=/models/torch
 WORKDIR /
 
-# Update and upgrade the system packages
+# 1. Installazioni di sistema (Cambiano quasi mai)
 RUN apt-get update -y && \
-    apt-get upgrade -y && \
-    apt-get install --yes --no-install-recommends sudo ca-certificates git wget curl bash libgl1 libx11-6 software-properties-common ffmpeg build-essential -y &&\
-    apt-get autoremove -y && \
-    apt-get clean -y && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install --yes --no-install-recommends \
+        sudo ca-certificates git wget curl bash \
+        libgl1 libx11-6 software-properties-common ffmpeg build-essential && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
-# Install Python 3.10
-RUN apt-get update -y && \
-    apt-get install python3.10 python3.10-dev python3.10-venv python3-pip -y --no-install-recommends && \
-    ln -s /usr/bin/python3.10 /usr/bin/python && \
-    rm -f /usr/bin/python3 && \
-    ln -s /usr/bin/python3.10 /usr/bin/python3 && \
-    apt-get autoremove -y && \
-    apt-get clean -y && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
+# 2. Pip Upgrade e Requirements (Cambiano solo se aggiungi librerie)
 COPY builder/requirements.txt /requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
-    pip install huggingface_hub[hf_xet] && \
-    pip install -r /requirements.txt --no-cache-dir
+    pip install -r /requirements.txt && \
+    # torchcodec non è compatibile con PyTorch 2.8.0 e manca libnppicc.so.12;
+    # pyannote.audio ha un fallback funzionante, quindi lo rimuoviamo
+    pip uninstall -y torchcodec || true && \
+    # Aggiorna il checkpoint pyannote da Lightning v1.5.4 a v2.6.1 in modo permanente
+    python3 -c "import whisperx, os; p = os.path.join(os.path.dirname(whisperx.__file__), 'assets', 'pytorch_model.bin'); os.system(f'python3 -m lightning.pytorch.utilities.upgrade_checkpoint {p}')"
 
-# Copy and run script to fetch models
+# 3. Download dei Modelli (Pesanti, da fare UNA volta sola)
+# config.py serve a fetch_models.py per leggere MODELS e COMPUTE_TYPE_CPU
+COPY src/config.py /config.py
 COPY builder/fetch_models.py /fetch_models.py
-RUN python /fetch_models.py && \
-    rm /fetch_models.py
+RUN python3 /fetch_models.py && rm /fetch_models.py /config.py
 
-# Copy handler and other code
+# 4. Codice sorgente (Cambia SEMPRE)
+# Copiamo il codice solo alla fine.
 COPY src .
-
-# test input that will be used when the container runs outside of runpod
 COPY test_input.json .
 
-# Set default command
-CMD python -u /rp_handler.py
+CMD ["python3", "-u", "/rp_handler.py"]

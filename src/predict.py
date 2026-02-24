@@ -1,269 +1,239 @@
-"""
-This file contains the Predictor class, which is used to run predictions on the
-Whisper model. It is based on the Predictor class from the original Whisper
-repository, with some modifications to make it work with the RP platform.
-"""
-
 import gc
-import threading
-from concurrent.futures import (
-    ThreadPoolExecutor,
-)  # Still needed for transcribe potentially?
-import numpy as np
+import hashlib
+import json
 
+import torch
+import whisperx
 from runpod.serverless.utils import rp_cuda
 
-from faster_whisper import WhisperModel
-from faster_whisper.utils import format_timestamp
-
-# Define available models (for validation)
-AVAILABLE_MODELS = {
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v1",
-    "large-v2",
-    "large-v3",
-    "turbo",
-}
-
+from config import (
+    MODELS,
+    AVAILABLE_VAD_METHODS,
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_MODEL,
+    DEFAULT_TRANSCRIPTION_FORMAT,
+    DEFAULT_TRANSLATION_FORMAT,
+    DEFAULT_VAD_METHOD,
+)
 
 class Predictor:
-    """A Predictor class for the Whisper model with lazy loading"""
-
     def __init__(self):
-        """Initializes the predictor with no models loaded."""
-        self.models = {}
-        self.model_lock = (
-            threading.Lock()
-        )  # Lock for thread-safe model loading/unloading
+        self._model = None
+        self._model_name = None
+        self._model_key = None
 
     def setup(self):
-        """No models are pre-loaded. Setup is minimal."""
+        # Qui potresti opzionalmente pre-caricare il modello di default
+        # all'avvio a freddo del worker.
         pass
+
+    def _device(self):
+        return "cuda" if rp_cuda.is_available() else "cpu"
+
+    def _load_model(self, model_name, asr_options, vad_method):
+        # Generiamo l'hash basandoci solo sulle opzioni effettivamente passate
+        options_hash = hashlib.md5(
+            json.dumps(asr_options, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        
+        model_key = f"{model_name}:{vad_method}:{options_hash}"
+
+        # Se il modello con queste identiche configurazioni è già in RAM/VRAM, usciamo
+        if self._model_key == model_key:
+            return
+
+        device = self._device()
+
+        # Pulizia rigorosa del modello precedente
+        if self._model is not None:
+            del self._model
+            self._model = None
+            gc.collect()
+            if device == "cuda":
+                torch.cuda.empty_cache()
+
+        print(f"Loading model: {model_name} (vad={vad_method})...")
+        self._model = whisperx.load_model(
+            model_name,
+            device=device,
+            asr_options=asr_options,
+            vad_method=vad_method,
+        )
+
+        self._model_name = model_name
+        self._model_key = model_key
+        print(f"Model {model_name} loaded successfully.")
 
     def predict(
         self,
         audio,
-        model_name="base",
-        transcription="plain_text",
-        translate=False,
-        translation="plain_text",  # Added in a previous PR
+        model_name=DEFAULT_MODEL,
+        transcription_mode=DEFAULT_TRANSCRIPTION_FORMAT,
+        do_translate=False,  # Rinomato per evitare conflitto con il metodo self.translate
+        translation_format=DEFAULT_TRANSLATION_FORMAT,
         language=None,
-        temperature=0,
-        best_of=5,
         beam_size=5,
-        patience=1,
-        length_penalty=None,
-        suppress_tokens="-1",
         initial_prompt=None,
-        condition_on_previous_text=True,
-        temperature_increment_on_fallback=0.2,
-        compression_ratio_threshold=2.4,
+        condition_on_previous_text=False,
         logprob_threshold=-1.0,
         no_speech_threshold=0.6,
-        enable_vad=False,
-        word_timestamps=False,
+        suppress_numerals=False,
+        hotwords=None,
+        enable_word_timestamps=False,
+        batch_size=DEFAULT_BATCH_SIZE,
+        vad_method=DEFAULT_VAD_METHOD,
     ):
-        """
-        Run a single prediction on the model, loading/unloading models as needed.
-        """
-        if model_name not in AVAILABLE_MODELS:
-            raise ValueError(
-                f"Invalid model name: {model_name}. Available models are: {AVAILABLE_MODELS}"
-            )
+        if model_name not in MODELS:
+            raise ValueError(f"Invalid model: {model_name}. Available: {MODELS}")
 
-        with self.model_lock:
-            model = None
-            if model_name not in self.models:
-                # Unload existing model if necessary
-                if self.models:
-                    existing_model_name = list(self.models.keys())[0]
-                    print(f"Unloading model: {existing_model_name}...")
-                    # Remove reference and clear dict
-                    del self.models[existing_model_name]
-                    self.models.clear()
-                    # Hint Python to release memory
-                    gc.collect()
-                    if rp_cuda.is_available():
-                        # If using PyTorch models, you might call torch.cuda.empty_cache()
-                        # FasterWhisper uses CTranslate2; explicit cache clearing might not be needed
-                        # but gc.collect() is generally helpful.
-                        pass
-                    print(f"Model {existing_model_name} unloaded.")
+        if vad_method not in AVAILABLE_VAD_METHODS:
+            raise ValueError(f"Invalid vad_method: {vad_method}. Available: {AVAILABLE_VAD_METHODS}")
 
-                # Load the requested model
-                print(f"Loading model: {model_name}...")
-                try:
-                    loaded_model = WhisperModel(
-                        model_name,
-                        device="cuda" if rp_cuda.is_available() else "cpu",
-                        compute_type="float16" if rp_cuda.is_available() else "int8",
-                    )
-                    self.models[model_name] = loaded_model
-                    model = loaded_model
-                    print(f"Model {model_name} loaded successfully.")
-                except Exception as e:
-                    print(f"Error loading model {model_name}: {e}")
-                    raise ValueError(f"Failed to load model {model_name}: {e}") from e
-            else:
-                # Model already loaded
-                model = self.models[model_name]
-                print(f"Using already loaded model: {model_name}")
+        # --- ASR OPTIONS (Solo i parametri sicuri ed esposti) ---
+        # I parametri ometti (temperature, patience, ecc.) prenderanno 
+        # automaticamente i default ideali di Faster-Whisper/WhisperX.
+        asr_options = {
+            "beam_size": beam_size,
+            "condition_on_previous_text": condition_on_previous_text,
+            "log_prob_threshold": logprob_threshold,
+            "no_speech_threshold": no_speech_threshold,
+            "suppress_numerals": suppress_numerals,
+        }
+        
+        # Aggiungiamo chiavi opzionali solo se l'utente le ha valorizzate
+        if initial_prompt:
+            asr_options["initial_prompt"] = initial_prompt
+        if hotwords:
+            asr_options["hotwords"] = hotwords
 
-            # Ensure model is loaded before proceeding
-            if model is None:
-                raise RuntimeError(
-                    f"Model {model_name} could not be loaded or retrieved."
-                )
+        # Caricamento dinamico
+        self._load_model(model_name, asr_options, vad_method)
+        device = self._device()
 
-        # Model is now loaded and ready, proceed with prediction (outside the lock?)
-        # Consider if transcribe is thread-safe or if it should also be within the lock
-        # For now, keeping transcribe outside as it's CPU/GPU bound work
+        # Caricamento audio in array numpy
+        audio_array = whisperx.load_audio(str(audio))
+        
+        # 1. Trascrizione ed eventuale allineamento
+        detected_language, transcription, serialized_segments, word_timestamps = self.transcribe(
+            transcription_mode, language, enable_word_timestamps, batch_size, device, audio_array
+        ) 
 
-        if temperature_increment_on_fallback is not None:
-            temperature = tuple(
-                np.arange(temperature, 1.0 + 1e-6, temperature_increment_on_fallback)
-            )
-        else:
-            temperature = [temperature]
-
-        # Note: FasterWhisper's transcribe might release the GIL, potentially allowing
-        # other threads to acquire the model_lock if transcribe is lengthy.
-        # If issues arise, the lock might need to encompass the transcribe call too.
-        segments, info = list(
-            model.transcribe(
-                str(audio),
-                language=language,
-                task="transcribe",
-                beam_size=beam_size,
-                best_of=best_of,
-                patience=patience,
-                length_penalty=length_penalty,
-                temperature=temperature,
-                compression_ratio_threshold=compression_ratio_threshold,
-                log_prob_threshold=logprob_threshold,
-                no_speech_threshold=no_speech_threshold,
-                condition_on_previous_text=condition_on_previous_text,
-                initial_prompt=initial_prompt,
-                prefix=None,
-                suppress_blank=True,
-                suppress_tokens=[-1],  # Might need conversion from string
-                without_timestamps=False,
-                max_initial_timestamp=1.0,
-                word_timestamps=word_timestamps,
-                vad_filter=enable_vad,
-            )
-        )
-
-        segments = list(segments)
-
-        # Format transcription
-        transcription_output = format_segments(transcription, segments)
-
-        # Handle translation if requested
+        # 2. Eventuale traduzione (Whisper traduce sempre e solo verso l'Inglese)
         translation_output = None
-        if translate:
-            translation_segments, _ = model.transcribe(
-                str(audio),
-                task="translate",
-                temperature=temperature,  # Reuse temperature settings for translation
-            )
-            translation_output = format_segments(
-                translation, list(translation_segments)
+        if do_translate:
+            translation_output = self.translate(
+                translation_format, detected_language, batch_size, audio_array
             )
 
-        results = {
-            "segments": serialize_segments(segments),
-            "detected_language": info.language,
-            "transcription": transcription_output,
+        return {
+            "segments": serialized_segments,
+            "detected_language": detected_language,
+            "transcription": transcription,
             "translation": translation_output,
-            "device": "cuda" if rp_cuda.is_available() else "cpu",
+            "word_timestamps": word_timestamps,
+            "device": device,
             "model": model_name,
         }
 
-        if word_timestamps:
-            word_timestamps_list = []
-            for segment in segments:
-                for word in segment.words:
-                    word_timestamps_list.append(
-                        {
-                            "word": word.word,
-                            "start": word.start,
-                            "end": word.end,
-                        }
-                    )
-            results["word_timestamps"] = word_timestamps_list
+    def transcribe(self, transcription_mode, language, enable_word_timestamps, batch_size, device, audio_array):
+        # Trascrizione Base
+        result = self._model.transcribe(
+            audio_array,
+            batch_size=batch_size,
+            num_workers=0,
+            language=language,
+            task="transcribe",
+            chunk_size=30,
+        )
 
-        return results
+        detected_language = result.get("language") or language or "unknown"
+        segments = result["segments"]
+
+        # Allineamento Word-Level (se richiesto)
+        if enable_word_timestamps and segments:
+            try:
+                align_model, align_metadata = whisperx.load_align_model(
+                    language_code=detected_language,
+                    device=device,
+                )
+                aligned = whisperx.align(
+                    segments, align_model, align_metadata, audio_array, device,
+                    return_char_alignments=False,
+                )
+                segments = aligned["segments"]
+                
+                # Pulizia approfondita dopo l'allineamento
+                del align_model
+                gc.collect()
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                    
+            except Exception as e:
+                print(f"Warning: word alignment failed: {e}")
+
+        transcription = format_segments(transcription_mode, segments)
+        serialized_segments = serialize_segments(segments)
+
+        # Bug fixato: Creazione corretta della lista dei timestamp
+        word_timestamps = [
+            {"word": w.get("word", ""), "start": w.get("start", 0), "end": w.get("end", 0)}
+            for seg in segments
+            for w in seg.get("words", [])
+        ] if enable_word_timestamps else None
+            
+        return detected_language, transcription, serialized_segments, word_timestamps
+
+    def translate(self, format_type, language, batch_size, audio_array):
+        trans_result = self._model.transcribe(
+            audio_array,
+            language=language,
+            task="translate",
+            batch_size=batch_size,
+        )
+        return format_segments(format_type, trans_result["segments"])
 
 
-def serialize_segments(transcript):
-    """
-    Serialize the segments to be returned in the API response.
-    """
+# --- UTILITIES ---
+
+def serialize_segments(segments):
     return [
-        {
-            "id": segment.id,
-            "seek": segment.seek,
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text,
-            "tokens": segment.tokens,
-            "temperature": segment.temperature,
-            "avg_logprob": segment.avg_logprob,
-            "compression_ratio": segment.compression_ratio,
-            "no_speech_prob": segment.no_speech_prob,
-        }
-        for segment in transcript
+        {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
+        for seg in segments
     ]
 
-
 def format_segments(format_type, segments):
-    """
-    Format the segments to the desired format
-    """
-
     if format_type == "plain_text":
-        return " ".join([segment.text.lstrip() for segment in segments])
+        return " ".join(seg["text"].strip() for seg in segments)
     elif format_type == "formatted_text":
-        return "\n".join([segment.text.lstrip() for segment in segments])
+        return "\n".join(seg["text"].strip() for seg in segments)
     elif format_type == "srt":
         return write_srt(segments)
-    elif format_type == "vtt":  # Added VTT case
+    elif format_type == "vtt":
         return write_vtt(segments)
-    else:  # Default or unknown format
-        print(f"Warning: Unknown format '{format_type}', defaulting to plain text.")
-        return " ".join([segment.text.lstrip() for segment in segments])
+    else:
+        return " ".join(seg["text"].strip() for seg in segments)
 
+def _fmt_ts(seconds, always_include_hours=False, decimal_marker="."):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = round((seconds % 1) * 1000)
+    if always_include_hours or h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}{decimal_marker}{ms:03d}"
+    return f"{m:02d}:{s:02d}{decimal_marker}{ms:03d}"
 
-def write_vtt(transcript):
-    """
-    Write the transcript in VTT format.
-    """
+def write_vtt(segments):
     result = ""
-
-    for segment in transcript:
-        # Using the consistent timestamp format from previous PR
-        result += f"{format_timestamp(segment.start, always_include_hours=True)} --> {format_timestamp(segment.end, always_include_hours=True)}\n"
-        result += f"{segment.text.strip().replace('-->', '->')}\n"
-        result += "\n"
-
+    for seg in segments:
+        result += f"{_fmt_ts(seg['start'], always_include_hours=True)} --> {_fmt_ts(seg['end'], always_include_hours=True)}\n"
+        result += f"{seg['text'].strip().replace('-->', '->')}\n\n"
     return result
 
-
-def write_srt(transcript):
-    """
-    Write the transcript in SRT format.
-    """
+def write_srt(segments):
     result = ""
-
-    for i, segment in enumerate(transcript, start=1):
+    for i, seg in enumerate(segments, start=1):
         result += f"{i}\n"
-        result += f"{format_timestamp(segment.start, always_include_hours=True, decimal_marker=',')} --> "
-        result += f"{format_timestamp(segment.end, always_include_hours=True, decimal_marker=',')}\n"
-        result += f"{segment.text.strip().replace('-->', '->')}\n"
-        result += "\n"
-
+        result += f"{_fmt_ts(seg['start'], always_include_hours=True, decimal_marker=',')} --> "
+        result += f"{_fmt_ts(seg['end'], always_include_hours=True, decimal_marker=',')}\n"
+        result += f"{seg['text'].strip().replace('-->', '->')}\n\n"
     return result

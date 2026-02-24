@@ -1,3 +1,16 @@
+from config import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_BEAM_SIZE,
+    DEFAULT_CONDITION_ON_PREVIOUS_TEXT,
+    DEFAULT_INITIAL_PROMPT,
+    DEFAULT_LOG_PROB_THRESHOLD,
+    DEFAULT_MODEL,
+    DEFAULT_NO_SPEECH_THRESHOLD,
+    DEFAULT_TRANSCRIPTION_FORMAT,
+    DEFAULT_TRANSLATION_FORMAT,
+    DEFAULT_VAD_METHOD,
+)
+
 INPUT_VALIDATIONS = {
     'audio': {
         'type': str,
@@ -12,12 +25,12 @@ INPUT_VALIDATIONS = {
     'model': {
         'type': str,
         'required': False,
-        'default': 'base'
+        'default': DEFAULT_MODEL
     },
     'transcription': {
         'type': str,
         'required': False,
-        'default': 'plain_text'
+        'default': DEFAULT_TRANSCRIPTION_FORMAT
     },
     'translate': {
         'type': bool,
@@ -27,81 +40,61 @@ INPUT_VALIDATIONS = {
     'translation': {
         'type': str,
         'required': False,
-        'default': 'plain_text'
+        'default': DEFAULT_TRANSLATION_FORMAT
     },
     'language': {
         'type': str,
         'required': False,
         'default': None
     },
-    'temperature': {
-        'type': float,
-        'required': False,
-        'default': 0
-    },
-    'best_of': {
-        'type': int,
-        'required': False,
-        'default': 5
-    },
     'beam_size': {
         'type': int,
         'required': False,
-        'default': 5
-    },
-    'patience': {
-        'type': float,
-        'required': False,
-        'default': 1.0
-    },
-    'length_penalty': {
-        'type': float,
-        'required': False,
-        'default': 0
-    },
-    'suppress_tokens': {
-        'type': str,
-        'required': False,
-        'default': '-1'
+        'default': DEFAULT_BEAM_SIZE
     },
     'initial_prompt': {
         'type': str,
         'required': False,
-        'default': None
+        'default': DEFAULT_INITIAL_PROMPT
     },
     'condition_on_previous_text': {
         'type': bool,
         'required': False,
-        'default': True
-    },
-    'temperature_increment_on_fallback': {
-        'type': float,
-        'required': False,
-        'default': 0.2
-    },
-    'compression_ratio_threshold': {
-        'type': float,
-        'required': False,
-        'default': 2.4
+        'default': DEFAULT_CONDITION_ON_PREVIOUS_TEXT
     },
     'logprob_threshold': {
         'type': float,
         'required': False,
-        'default': -1.0
+        'default': DEFAULT_LOG_PROB_THRESHOLD
     },
     'no_speech_threshold': {
         'type': float,
         'required': False,
-        'default': 0.6
+        'default': DEFAULT_NO_SPEECH_THRESHOLD
     },
-    'enable_vad': {
+    'suppress_numerals': {
         'type': bool,
         'required': False,
         'default': False
+    },
+    'hotwords': {
+        'type': str,
+        'required': False,
+        'default': None
     },
     'word_timestamps': {
         'type': bool,
         'required': False,
         'default': False
+    },
+    'batch_size': {
+        'type': int,
+        'required': False,
+        'default': DEFAULT_BATCH_SIZE
+    },
+    'vad_method': {
+        'type': str,
+        'required': False,
+        'default': DEFAULT_VAD_METHOD
     },
 }
