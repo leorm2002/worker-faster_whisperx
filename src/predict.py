@@ -91,6 +91,8 @@ class Predictor:
         if vad_method not in AVAILABLE_VAD_METHODS:
             raise ValueError(f"Invalid vad_method: {vad_method}. Available: {AVAILABLE_VAD_METHODS}")
 
+        language = normalize_language(language)
+
         # --- ASR OPTIONS (Solo i parametri sicuri ed esposti) ---
         # I parametri ometti (temperature, patience, ecc.) prenderanno 
         # automaticamente i default ideali di Faster-Whisper/WhisperX.
@@ -138,6 +140,8 @@ class Predictor:
         }
 
     def transcribe(self, transcription_mode, language, enable_word_timestamps, batch_size, device, audio_array):
+        language = normalize_language(language)
+
         # Trascrizione Base
         result = self._model.transcribe(
             audio_array,
@@ -224,6 +228,16 @@ def format_segments(format_type, segments):
         return write_vtt(segments)
     else:
         return " ".join(seg["text"].strip() for seg in segments)
+
+def normalize_language(language):
+    if language is None:
+        return None
+    if isinstance(language, str):
+        normalized = language.strip().lower()
+        if normalized in {"", "auto", "none", "null"}:
+            return None
+        return normalized
+    return language
 
 def _fmt_ts(seconds, always_include_hours=False, decimal_marker="."):
     h = int(seconds // 3600)

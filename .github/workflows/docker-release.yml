@@ -1,25 +1,36 @@
 name: Test and Deploy
 
 on:
-    push:
-        branches: [main]
-    pull_request:
-        branches: [main]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-    test-and-deploy:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Docker Login
-              uses: docker/login-action@v3
-              with:
-                  username: ${{ vars.DOCKERHUB_USERNAME }}
-                  password: ${{ secrets.DOCKERHUB_TOKEN }}
-            - uses: actions/checkout@v3
-            - name: Build and push Docker image
-              uses: docker/build-push-action@v6.18.0
-              with:
-                  secrets: hf_token=${{ secrets.HF_TOKEN }}
-                  context: .
-                  push: true
-                  tags: 'leo02n/whisperx-worker:LATEST'
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: vars
+        run: |
+          echo "image=leo02n/whisperx-worker" >> "$GITHUB_OUTPUT"
+          echo "incremental_tag=v${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker Login
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6.18.0
+        with:
+          secrets: hf_token=${{ secrets.HF_TOKEN }}
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ steps.vars.outputs.image }}:latest
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.incremental_tag }}
